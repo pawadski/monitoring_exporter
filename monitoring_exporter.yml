@@ -1,0 +1,40 @@
+---
+- hosts: all
+  vars:
+    # set below to an IP address you'd like to allow to read the xinetd files
+    ip_address: "123.123.123.123"
+  tasks:
+  - file:
+      path: "/opt/metrics.d"
+      state: directory
+
+  - apt:
+      pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
+      state: installed
+    when:
+    - "ansible_distribution == 'Ubuntu' or ansible_distribution == 'Debian'"
+    
+  - yum:
+      pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
+      state: installed
+    when:
+    - "ansible_distribution == 'CentOS' or ansible_distribution == 'CloudLinux'"
+  
+  - copy: 
+      src: "httpwrapper"
+      dest: "/opt/metrics.d/httpwrapper"
+      mode: 0755
+
+  - copy: 
+      src: "exporter_monitoring"
+      dest: "/opt/metrics.d/exporter_monitoring"
+      mode: 0755
+      
+  - template:
+      src: "exporter_monitoring.xinetd"
+      dest: "/etc/xinetd.d/exporter_monitoring"
+
+  - service:
+      name: xinetd
+      state: restarted
+      enabled: yes
