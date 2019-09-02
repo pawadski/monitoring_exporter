@@ -14,7 +14,7 @@ Requires Bash >4, on CentOS 5 for example, you will need to install Bash 4 (perh
 
 ###  Ansible
 
-Playbooks are included in playbooks/. 
+Playbook is included in `monitoring_exporter.yml`.
 
 You will likely need to edit the IP address variable `ip_address` - this is the IP address the playbook will add to the appropriate xinetd.d files, as a makeshift whitelist if you have only one Prometheus instance that's going to be contacting the exporter.
 
