@@ -10,7 +10,7 @@ Tested on:
 - CentOS 5 (with a workaround), 6, 7
 - CloudLinux 6, 7
 
-Requires Bash >4, on CentOS 5 the playbook will attempt to compile a separate Bash version during install.
+Requires Bash >4, on CentOS 5 for example, you will need to install Bash 4 (perhaps into a separate binary ie. `/bin/bash42`) and edit `bashPath` to it in the exporter file. You may also need to change the shebang lines, depending on your system.
 
 ###  Ansible
 
@@ -21,11 +21,11 @@ You will likely need to edit the IP address variable `ip_address` - this is the 
 ### Installing without Ansible
 
 - Install Xinetd
-- Place desired xinetd jobs from xinetd.d into /etc/xinetd.d/
-- mkdir -p /opt/metrics.d/
-- Place exporter in /opt/metrics.d/exporter_monitoring
-- Place httpwrapper in /opt/metrics.d/
-- chmod +x /opt/metrics.d/*
+- "template" the `exporter_monitoring.xinetd` file into /etc/xinetd.d/ (you will need to change the IP address setting inside)
+- `mkdir -p /opt/metrics.d/`
+- Place `exporter_monitoring` in `/opt/metrics.d/exporter_monitoring`
+- Place `httpwrapper` in `/opt/metrics.d/httpwrapper`
+- `chmod +x /opt/metrics.d/*`
 - Restart Xinetd
 
 ## No docker?!
