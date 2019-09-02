@@ -1,0 +1,13 @@
+service exporter_monitoring
+{
+  type = unlisted
+  port = 10100
+  socket_type = stream
+  wait = no
+  user = root
+  server = /opt/metrics.d/httpwrapper
+  server_args = exporter_monitoring
+  disable = no
+  only_from = {{ ip_address }}
+  log_type = FILE /dev/null 
+}
