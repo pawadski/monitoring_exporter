@@ -1,0 +1,410 @@
+#!/bin/bash
+#  Pawel Adamski @ https://github.com/pawadski/monitoring_exporter
+#  tested on: bash >= 4.0
+#        coreutils >= 8.4
+
+# BEGIN CONFIG
+# edit below
+# number of threads (subprocesses) to use
+threads=2
+# enables "modules"
+#       loadavg - load average, jobs, last PID
+#          stat - /proc/stat (no individual CPU granularity)
+#        iostat - iostat -x
+#    filesystem - df
+#        memory - /proc/meminfo
+#        netdev - /proc/net/dev
+#       netstat - netstat, per-port granularity of established connections
+#        uptime - system uptime
+#        kernel - kernel version (as label)
+#      slabinfo - /proc/slabinfo # disabled by default
+declare -a exporters=(loadavg stat iostat filesystem memory netdev netstat uptime kernel)
+# used to determine if netstat module should only report total amount of connections
+# useful for servers like openvz hypervisors or generally busy servers, enabled by default
+netstat_totalonly=1
+# useful for limiting the amount of metrics - enable to report only
+# slabs that are of non-zero size
+slab_nonzeroonly=1
+# defines an alternative path df should monitor
+# ie. df / /mnt/otherfs, empty by default
+filesystem_targets=""
+# defines the exporter name, prepended to every metric name
+exporterName="monitoring"
+# define path to interpreter, in case it's different than stock
+bashPath="/bin/bash"
+
+# END CONFIG
+#
+# do not edit below
+output=""
+
+# define some associative arrays
+declare -A metricContent metricType metricHelp
+
+#
+#  this function builds the metric type and help data
+#
+function buildMetric {
+    # 1 = metric name
+    # 2 = metric type
+    # 3 = metric help text
+    metricType["${exporterName}_$1"]="$2"
+    metricHelp["${exporterName}_$1"]="$3"
+    # metricContent["${exporterName}_$1"]=""
+}
+
+#
+#  this function adds actual metric content to metric
+#
+function addMetricContent {
+    metricName="${exporterName}_$1"
+    declare -a contents
+    shift;
+    # add everything
+    for item in "$@"; do 
+        if [ "${item:0:1}" != "{" ]; then
+            item=" $item"
+        fi
+        # metricContent[$metricName]="${metricContent[$metricName]}$metricName$item\n"
+        contents+=("$metricName$item")
+    done 
+    if [ ! -z "${metricContent[$metricName]}" ]; then 
+        metricContent[$metricName]=$(join_by "\n" "${metricContent[$metricName]}" "${contents[*]}")
+    else 
+        metricContent[$metricName]=$(join_by "\n" "${contents[*]}")
+    fi
+}
+
+#
+#  this builds and prints final output
+#
+function buildOutput {
+    #
+    #  build output
+    #
+    for metricName in "${!metricContent[@]}"; do
+        output="$output# HELP $metricName ${metricHelp[$metricName]}\n# TYPE $metricName ${metricType[$metricName]}\n${metricContent[$metricName]}\n"
+    done
+
+    #
+    #  print output into temp directory
+    #
+    echo -n "$output"
+
+    exit
+}
+
+#
+#  simulates array join
+#
+function join_by { local d=$1; shift; echo -n "$1"; shift; printf "%s" "${@/#/$d}"; }
+
+#
+#  metric runners
+#  ideally define your exporters here as metrics_XXXXXX
+#
+
+#
+# BEGIN uptime
+function metrics_slabinfo {
+    #buildMetric "kernel_version" "gauge" "Current kernel version as label"
+    #addMetricContent "kernel_version{version=\"$(uname -r)\"}" 1
+    buildMetric "slabinfo_active_objs" "gauge" "The number of objects that are currently active (i.e., in use)"
+    buildMetric "slabinfo_num_objs" "gauge" "The total number of allocated objects (i.e., objects that are both in use and not in use)"
+    buildMetric "slabinfo_objsize_bytes" "gauge" "The size of objects in this slab, in bytes"
+    buildMetric "slabinfo_objperslab" "gauge" "The number of objects stored in each slab"
+    buildMetric "slabinfo_pagesperslab" "gauge" "The number of pages allocated for each slab"
+
+    while read slabname active_objs num_objs objsize objperslab pagesperslab etc; do 
+        if [ "$slabname" = "#" ]; then 
+            continue
+        fi 
+        if [ "$slab_nonzeroonly" = "1" ]; then 
+            if [ "$objsize" = "0" ]; then 
+                continue
+            fi 
+        fi 
+        addMetricContent "slabinfo_active_objs" "{slab=\"$slabname\"} $active_objs"
+        addMetricContent "slabinfo_num_objs" "{slab=\"$slabname\"} $num_objs"
+        addMetricContent "slabinfo_objsize_bytes" "{slab=\"$slabname\"} $objsize"
+        addMetricContent "slabinfo_objperslab" "{slab=\"$slabname\"} $objperslab"
+        addMetricContent "slabinfo_pagesperslab" "{slab=\"$slabname\"} $pagesperslab"
+    done < <(grep tunables /proc/slabinfo)
+
+    buildOutput
+}
+# END uptime
+
+#
+# BEGIN uptime
+function metrics_kernel {
+    buildMetric "kernel_version" "gauge" "Current kernel version as label"
+    addMetricContent "kernel_version" "{version=\"$(uname -r)\"} 1"
+
+    buildOutput
+}
+# END uptime
+
+#
+# BEGIN uptime
+function metrics_uptime {
+    buildMetric "uptime_seconds_total" "counter" "System uptime"
+    addMetricContent "uptime_seconds_total" "$(awk '{print $1}' /proc/uptime)"
+
+    buildOutput
+}
+# END uptime
+
+#
+# BEGIN netstat (sorts netstat ESTABLISHED connections by port label)
+function metrics_netstat {
+    buildMetric "netstat_established_total" "gauge" "Total number of Established connections"
+
+    read conn _ <<< $(netstat -s | grep 'connections established$')
+    addMetricContent "netstat_established_total" "$conn"
+
+    if [ "$netstat_totalonly" = "1" ]; then 
+        buildOutput
+        return 
+    fi 
+
+    conndump=$(netstat -tn | grep ESTABLISHED)
+
+    buildMetric "netstat_established" "gauge" "Number of Established connections per port"
+
+    while read -r count port; do 
+        addMetricContent "netstat_established" "{port=\"$port\"} $count"
+    done < <(echo "$conndump" | awk '{print $4}' | cut -d':' -f2 | sort | uniq -c | sed 's/^\s*//')
+
+    buildOutput
+}
+# END netstat
+
+#
+# BEGIN load average stuff
+function metrics_loadavg {
+    buildMetric "loadavg_load1" "gauge" "1-minute load average from /proc/loadavg"
+    buildMetric "loadavg_load5" "gauge" "10-minute load average from /proc/loadavg"
+    buildMetric "loadavg_load15" "gauge" "15-minute load average from /proc/loadavg"
+    buildMetric "loadavg_jobs_running" "gauge" "Running jobs from /proc/loadavg"
+    buildMetric "loadavg_jobs_background" "gauge" "Background jobs from /proc/loadavg"
+    buildMetric "loadavg_last_pid" "counter" "Last PID from /proc/loadavg"
+
+    while read -r load1 load2 load3 procs lastpid; do
+        # sample input: 4.76 3.86 3.58 9/652 17232
+        addMetricContent "loadavg_load1" $load1
+        addMetricContent "loadavg_load5" $load2
+        addMetricContent "loadavg_load15" $load3
+        while IFS='/' read -r running background; do 
+            addMetricContent "loadavg_jobs_running" $running
+            addMetricContent "loadavg_jobs_background" $background
+        done <<< "$procs"
+        addMetricContent "loadavg_last_pid" $lastpid
+    done < /proc/loadavg
+
+    buildOutput
+}
+# END load average stuff
+
+#
+# BEGIN memory stuff
+function metrics_memory {
+    buffer=$(awk '{ print tolower($1), $2 }' /proc/meminfo)
+    # we export only what we need 
+    for item in memtotal memfree memavailable buffers cached slab swaptotal swapfree sreclaimable committed_as; do 
+        while read -r metric value; do
+            if [ ! -z "$metric" ]; then 
+                buildMetric "meminfo_${item}_kbytes" "gauge" "From /proc/meminfo"
+                addMetricContent "meminfo_${item}_kbytes" "$value"
+            fi 
+        done < <(grep "^$item:" <<< "$buffer")
+    done
+
+    buildOutput
+}
+# END memory stuff
+
+#
+# BEGIN filesystem usage
+function metrics_filesystem {
+    buffer=$(df -PT $filesystem_targets 2>/dev/null | grep -v '^Filesystem' | tr -s '\t' ' ')
+    
+    # Filesystem 1024-blocks Used Available Capacity Mounted on
+    # /dev/mapper/cl-home 99533328 37320564 62212764 38% /
+    buildMetric "filesystem_total_kbytes" "gauge" "From df"
+    buildMetric "filesystem_used_kbytes" "gauge" "From df"
+    buildMetric "filesystem_avail_kbytes" "gauge" "From df"
+    buildMetric "filesystem_capacity_percent" "gauge" "From df"
+
+    while read -r device fstype total used avail percent target; do 
+        labels="{mountpoint=\"$target\",source=\"$device\",fstype=\"$fstype\"}"
+        addMetricContent "filesystem_total_kbytes" "$labels $total"
+        addMetricContent "filesystem_used_kbytes" "$labels $used"
+        addMetricContent "filesystem_avail_kbytes" "$labels $avail"
+        noPercentSign=$(echo "$percent" | sed 's,%,,g')
+        addMetricContent "filesystem_capacity_percent" "$labels $noPercentSign"
+    done <<< "$buffer"
+
+    buildOutput
+}
+# END filesystem usage
+
+#
+# BEGIN /proc/stat CPU stats
+function metrics_stat {
+    # /proc/stat has different column number in various kernel versions,
+    # so we instantiate a list of columns we're going to loop over later
+    declare -a cols=(user nice system idle iowait irq softirq steal guest guest_nice)
+
+    # add metric
+    buildMetric "stat_cpu_seconds_total" "counter" "From /proc/stat"
+
+    # fetch first (we'll use it to build "current" usage later)
+    cpu1=$(head -n 1 /proc/stat | tr -s '\t' ' ' | sed 's,cpu ,,g')
+    # sleep
+    sleep 1
+    # fetch second
+    cpu2=$(head -n 1 /proc/stat | tr -s '\t' ' ' | sed 's,cpu ,,g')
+
+    # add metric contents
+    index=0
+    while read -r data; do 
+        for item in $data; do 
+            addMetricContent "stat_cpu_seconds_total" "{mode=\"${cols[$index]}\"} $item"
+            index=$(( index + 1 ))
+        done
+    done <<< "$cpu2"
+
+    # create three temporary arrays
+    read -r -a cpudata1 <<< "$cpu1"
+    read -r -a cpudata2 <<< "$cpu2"
+    declare -a difference=()
+
+    # iterate & compare /proc/stat output arrays
+    index=0
+    for item in "${cpudata1[@]}"; do
+        difference[$index]=$(( ${cpudata2[$index]} - ${cpudata1[$index]} ))
+        index=$(( $index + 1 ))
+    done 
+
+    total=$(( ${difference[0]} + ${difference[1]} + ${difference[2]} + ${difference[3]} + ${difference[4]} ))
+    idlePercentage="(( ${difference[3]} + ${difference[4]} ) / $total) * 100.0"
+    iowaitPercentage="(( ${difference[4]} ) / $total) * 100.0"
+    cpuutil=$(awk "BEGIN { printf \"%i\", 100.0 - $idlePercentage }" )
+    iowait=$(awk "BEGIN { printf \"%i\", $iowaitPercentage }")
+
+    # build "current" usage metric
+    buildMetric "stat_cpu_current_usage_percent" "gauge" "Calculated instant CPU usage"
+    buildMetric "stat_cpu_current_iowait_percent" "gauge" "Calculated instant CPU iowait"
+
+    # add content 
+    addMetricContent "stat_cpu_current_usage_percent" $cpuutil
+    addMetricContent "stat_cpu_current_iowait_percent" $iowait
+
+    buildOutput
+}
+# END /proc/stat CPU stats
+
+#
+# BEGIN extract data from iostat
+function metrics_iostat {
+    # OLD:buffer=$(iostat -xmy 1 1 | grep -v '^$\|^avg\-cpu\|^Linux\|^\s' | tr -s '\t' ' ')
+    # NEW:support for centos5 iostat
+    buffer=$(iostat -xm 1 2 | awk '/avg-cpu/{i++}i==2' | grep -v '^$\|^avg\-cpu\|^Linux\|^\s' | tr -s '\t' ' ')
+    # extract & make columns
+    declare -a cols=()
+
+    # loop over column names excluding "Device"
+    for column in $(echo "$buffer" | grep '^Device'); do 
+        if [ ! -z "$(grep -i device <<< $column)" ]; then
+            continue
+        fi 
+
+        # run some patterns against the column names
+        col=$(echo $column | sed 's,/s,,g; s,\-,_,g; s,%,,g' | tr '[:upper:]' '[:lower:]')
+        if [ "$col" = "util" ]; then 
+            col="util_percent"
+        fi 
+
+        # finally add to column array
+        cols+=($col)
+    done 
+
+    # create our iostat metrics
+    for column in "${cols[@]}"; do 
+        buildMetric "iostat_$column" "gauge" "From iostat"
+    done
+
+    # finally add our metric contents
+    index=0
+    while read line; do 
+        while read -r device data; do
+            device="${device/\//_}" # replace / in device names with _
+            for item in $data; do 
+                addMetricContent "iostat_${cols[$index]}" "{device=\"$device\"} $item"
+                index=$(( index + 1 ))
+            done 
+        done <<< "$line"
+        index=0
+    done < <(echo "$buffer" | grep -v '^Device')
+
+    buildOutput
+}
+# END extract data from iostat
+
+#
+# BEGIN extract data from /proc/net/dev
+function metrics_netdev {
+    buffer="$(tr -s '\t' ' ' < /proc/net/dev)"
+    # Inter-|   Receive                                                |  Transmit
+    #  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    #    lo: 8813597   72990    0    0    0     0          0         0  8813597   72990    0    0    0     0       0          0
+
+    for type in rx tx; do
+        for counter in bytes packets errs drop fifo frame compressed multicast; do 
+            buildMetric "netdev_${type}_${counter}_total" "counter" "From /proc/net/dev"
+        done 
+    done 
+
+    # dev rxbytes rxpkts rxerrs rxdrop rxfifo rxframe rxcomp rxmulticast txbytes txpkts txerrs txdrop txfifo txframe txcomp txmulticast
+    while read line; do 
+        newline=$(echo "$line" | sed 's,:, ,g' | tr -s '\t' ' ')
+        array=($newline)
+        
+        index=1
+        for type in rx tx; do 
+            for counter in bytes packets errs drop fifo frame compressed multicast; do 
+                addMetricContent "netdev_${type}_${counter}_total" "{device=\"${array[0]}\"} ${array[$index]}"
+                index=$(( index + 1 ))
+            done
+        done 
+    done < <(echo "$buffer" | grep ':')    
+
+    buildOutput
+}
+#
+
+if [ "$1" = "get" ]; then 
+    metrics_$3 > "/tmp/$2/$3"
+else
+    run=$(join_by , ${exporters[*]})
+
+    # make temp dir
+    mkdir -p /tmp/$$/
+
+    # we're using xargs to run this script in multiple subprocesses
+    # xargs will handle collecting data for us
+    output=$(echo "$run" | xargs -n1 -P$threads -d',' -- "$bashPath" "$0" get $$)
+
+    # the -e parameter transforms literal newlines into "actual" newlines
+    # echo -e "$output"
+    echo -e "$(cat /tmp/$$/*)"
+    
+    rm -rf /tmp/$$/
+fi
+
+exit 
+
+# BEGIN DEBUG SECTION
+# buildOutput
+# END DEBUG SECTION
