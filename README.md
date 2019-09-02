@@ -1,4 +1,4 @@
-# monitoring_exporter
+# Monitoring Exporter
 
 System metrics exporter for Prometheus. Written in Bash and served via Xinetd (and a small wrapper script that turns content HTTP-compliant).
 
@@ -27,6 +27,10 @@ You will likely need to edit the IP address variable `ip_address` - this is the 
 - Place `httpwrapper` in `/opt/metrics.d/httpwrapper`
 - `chmod +x /opt/metrics.d/*`
 - Restart Xinetd
+
+## Grafana
+
+A sample dashboard is included under `grafana_dashboard.json`.
 
 ## No docker?!
 
