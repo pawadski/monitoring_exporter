@@ -190,12 +190,12 @@ From /proc/slabinfo - usually lots of output, so disabled by default
 
 By default, `slab_nonzeroonly` is set to `1` so that this function reports only non-zero slabs
 
-| name                   | description                                                                           | additional labels | units |
-|------------------------|---------------------------------------------------------------------------------------|-------------------|-------|
-| slabinfo_active_objs   | Number of objects that are currently active (i.e., in use)                            | slab`1`           | N     |
-| slabinfo_num_objs      | Total number of allocated objects (i.e., objects that are both in use and not in use) | slab`1`           | N     |
-| slabinfo_objsize_bytes | Size of objects in this slab, in bytes                                                | slab`1`           | Bytes |
-| slabinfo_objperslab    | Number of objects stored in each slab                                                 | slab`1`           | N     |
-| slabinfo_pagesperslab  | Number of pages allocated for each slab                                               | slab`1`           | N     |
+| name                              | description                                                                           | additional labels | units |
+|-----------------------------------|---------------------------------------------------------------------------------------|-------------------|-------|
+| monitoring_slabinfo_active_objs   | Number of objects that are currently active (i.e., in use)                            | slab`1`           | N     |
+| monitoring_slabinfo_num_objs      | Total number of allocated objects (i.e., objects that are both in use and not in use) | slab`1`           | N     |
+| monitoring_slabinfo_objsize_bytes | Size of objects in this slab, in bytes                                                | slab`1`           | Bytes |
+| monitoring_slabinfo_objperslab    | Number of objects stored in each slab                                                 | slab`1`           | N     |
+| monitoring_slabinfo_pagesperslab  | Number of pages allocated for each slab                                               | slab`1`           | N     |
 
 `1` slab identifier
