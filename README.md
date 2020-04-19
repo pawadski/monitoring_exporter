@@ -1,6 +1,10 @@
 # Monitoring Exporter
 
-System metrics exporter for Prometheus. Written in Bash and served via Xinetd (and a small wrapper script that turns content HTTP-compliant).
+System metrics exporter for Prometheus. Written in Bash and served via Xinetd (and a small wrapper script that turns content HTTP-compliant). The exporter provides reasonably fast response times by offloading methods to subprocesses (see `workers=2`). However, the response time will always be at least 1 second, as the exporter calculates current CPU usage by measuring it over a second.
+
+#### A note on monitoring CPU usage
+
+This exporter provides you with two CPU usage metrics. One of them is taken from /proc/stat verbatim (`monitoring_stat_cpu_seconds_total`). The other is a computed CPU usage. The exporter computes CPU usage by measuring it over one second. **The CPU usage calculation ignores iowait - iowait is not CPU usage, the processor is happy to do other things while waiting on disk**.
 
 ## Installation
 
@@ -16,12 +20,16 @@ Requires Bash >4, on CentOS 5 for example, you will need to install Bash 4 (perh
 
 Playbook is included in `monitoring_exporter.yml`.
 
-You will likely need to edit the IP address variable `ip_address` - this is the IP address the playbook will add to the appropriate xinetd.d files, as a makeshift whitelist if you have only one Prometheus instance that's going to be contacting the exporter.
+You will likely need to edit the IP address variable `ip_address` - this is the IP address the playbook will add to the appropriate xinetd.d files, as a makeshift whitelist if you have only one Prometheus instance that's going to be contacting the exporter.   
+
+You can run the playbook with variables using the `-e` parameter: `ansible-playbook -l web_servers -e ip_address=123.123.123.123 monitoring_exporter.yml`
+
+Or fetching your public IP dynamically: `ansible-playbook -l web_servers -e ip_address=$(curl -s icanhazip.com) monitoring_exporter.yml`
 
 ### Installing without Ansible
 
 - Install Xinetd
-- "template" the `exporter_monitoring.xinetd` file into /etc/xinetd.d/ (you will need to change the IP address setting inside)
+- "template" the `exporter_monitoring.xinetd` file into /etc/xinetd.d/ (you will need to change the IP address setting inside or remove it if you do not intend on using the Xinetd whitelist)
 - `mkdir -p /opt/metrics.d/`
 - Place `exporter_monitoring` in `/opt/metrics.d/exporter_monitoring`
 - Place `httpwrapper` in `/opt/metrics.d/httpwrapper`
@@ -30,7 +38,7 @@ You will likely need to edit the IP address variable `ip_address` - this is the 
 
 ## Grafana
 
-A sample dashboard is included under `grafana_dashboard.json`.
+A Grafana dashboard can be found here: https://grafana.com/grafana/dashboards/12095
 
 ## No docker?!
 
@@ -40,9 +48,14 @@ This exporter is designed to run directly on the server. If you do make it work 
 
 ## Port 10100
 
-Provides the following metrics, separated by "modules". All module exports are prefixed with `monitoring_` in code.
+Provides the following metrics, separated by functions. All module exports are prefixed with `monitoring_` in code.   
 
-#### loadavg module
+## Configuring
+
+You are free to select only metrics relevant to you by editing this line:   
+`declare -a exporters=(loadavg stat iostat filesystem memory netdev netstat uptime kernel file_nr)`   
+
+#### loadavg (default: enabled)
 
 Exports data from `/proc/loadavg`
 
@@ -54,7 +67,7 @@ Exports data from `/proc/loadavg`
 | monitoring_loadavg_jobs_running    | Number of running jobs                           | none              | N     |
 | monitoring_loadavg_jobs_background | Number of background jobs                        | none              | N     |
 
-#### stat module
+#### stat (default: enabled)
 
 Exports *some* data from `/proc/stat`
 
@@ -67,7 +80,7 @@ Exports *some* data from `/proc/stat`
 `1.` calculated by subtracting `%iowait`+`%idle` from 100 over 1 second: `100 - (idle + iowait)`   
 `2.` calculated by subtracting `iowait` from `idle` over 1 second
 
-#### filesystem module
+#### filesystem (default: enabled)
 
 Exports data from `df`
 
@@ -82,7 +95,7 @@ Exports data from `df`
 `1.` source: the block device   
 `1.` fstype: filesystem type
 
-#### iostat module
+#### iostat (default: enabled)
 Exports data from `iostat -xm`
 
 | name                       | description                                                                                                                                                                                   | additional labels | units      |
@@ -103,7 +116,7 @@ Exports data from `iostat -xm`
 
 * device: the block device
 
-#### meminfo module
+#### meminfo (default: enabled)
 
 Exports data from `/proc/meminfo`
 
@@ -125,7 +138,7 @@ Exports data from `/proc/meminfo`
 |----------------------------------------|---------------------------------------------------------------------------------------------|-------------------|-----------|
 | monitoring_meminfo_memavailable_kbytes | An estimate of how much memory is available for starting new applications, without swapping | none              | kibibytes |
 
-#### netdev module
+#### netdev (default: enabled)
    
 Exports data from `/proc/net/dev`
 
@@ -150,7 +163,7 @@ Exports data from `/proc/net/dev`
 
 `1` network device
 
-#### netstat module
+#### netstat (default: enabled)
 
 | name                                  | description                                                       | additional labels | units |
 |---------------------------------------|-------------------------------------------------------------------|-------------------|-------|
@@ -160,3 +173,29 @@ Exports data from `/proc/net/dev`
 NB: Some hosts (like OpenVZ/LXC hypervisors) may have trouble reporting all connections on time with Netstat. It is advised to disable per-port granularity inside monitoring_exporter, under `netstat_totalonly`, ie. set it to `1`.
 
 `1` source port
+
+#### file_nr (default: enabled)
+
+Provides data from /proc/sys/fs/file-nr
+
+| name                         | description                     | additional labels | units |
+|------------------------------|---------------------------------|-------------------|-------|
+| monitoring_file_nr_allocated | All allocated file descriptors  | none              | N     |
+| monitoring_file_nr_free      | Free allocated file descriptors | none              | N     |
+| monitoring_file_nr_max       | Maximum open file descriptors   | none              | N     |
+
+#### slabinfo (default: disabled)
+
+From /proc/slabinfo - usually lots of output, so disabled by default
+
+By default, `slab_nonzeroonly` is set to `1` so that this function reports only non-zero slabs
+
+| name                   | description                                                                           | additional labels | units |
+|------------------------|---------------------------------------------------------------------------------------|-------------------|-------|
+| slabinfo_active_objs   | Number of objects that are currently active (i.e., in use)                            | slab`1`           | N     |
+| slabinfo_num_objs      | Total number of allocated objects (i.e., objects that are both in use and not in use) | slab`1`           | N     |
+| slabinfo_objsize_bytes | Size of objects in this slab, in bytes                                                | slab`1`           | Bytes |
+| slabinfo_objperslab    | Number of objects stored in each slab                                                 | slab`1`           | N     |
+| slabinfo_pagesperslab  | Number of pages allocated for each slab                                               | slab`1`           | N     |
+
+`1` slab identifier
