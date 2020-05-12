@@ -10,13 +10,13 @@
 
   - apt:
       pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
-      state: installed
+      state: present
     when:
     - "ansible_distribution == 'Ubuntu' or ansible_distribution == 'Debian'"
     
   - yum:
       pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
-      state: installed
+      state: present
     when:
     - "ansible_distribution == 'CentOS' or ansible_distribution == 'CloudLinux'"
   
