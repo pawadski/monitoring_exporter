@@ -1,0 +1,8 @@
+groups:
+- name: monitoring_recording_rules
+  interval: 1m
+  rules:
+  - record: monitoring_memory_usage_percent
+    expr: ((monitoring_meminfo_memtotal_kbytes - (monitoring_meminfo_memavailable_kbytes or (monitoring_meminfo_buffers_kbytes + monitoring_meminfo_cached_kbytes + monitoring_meminfo_memfree_kbytes))) / monitoring_meminfo_memtotal_kbytes) * 100
+  - record: monitoring_swap_usage_percent
+    expr: ((monitoring_meminfo_swaptotal_kbytes - monitoring_meminfo_swapfree_kbytes) / monitoring_meminfo_swaptotal_kbytes) * 100
