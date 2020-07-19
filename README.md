@@ -6,6 +6,13 @@ System metrics exporter for Prometheus. Written in Bash and served via Xinetd (a
 
 This exporter provides you with two CPU usage metrics. One of them is taken from /proc/stat verbatim (`monitoring_stat_cpu_seconds_total`). The other is a computed CPU usage. The exporter computes CPU usage by measuring it over one second. **The CPU usage calculation ignores iowait - iowait is not CPU usage, the processor is happy to do other things while waiting on disk**.
 
+## Table of Contents
+
+1. [Installation](#installation)
+2. [Grafana Dashboard](#grafana)
+3. [Metrics and Configuration](#metrics-and-configuration)
+4. [Extending](#extending)
+
 ## Installation
 
 Tested on:
@@ -44,7 +51,7 @@ A Grafana dashboard can be found here: https://grafana.com/grafana/dashboards/12
 
 This exporter is designed to run directly on the server. If you do make it work in Docker do let me know, though.
 
-# Metrics
+# Metrics and Configuration
 
 ## Port 10100
 
@@ -199,3 +206,48 @@ By default, `slab_nonzeroonly` is set to `1` so that this function reports only 
 | monitoring_slabinfo_pagesperslab  | Number of pages allocated for each slab                                               | slab`1`           | N     |
 
 `1` slab identifier
+
+## Extending
+
+Instead of modifying this exporter you may be interested in creating your own workflow following this post: [Exporting Prometheus Metrics with Bash Scripts](https://apawel.me/exporting-prometheus-metrics-with-bash-scripts/)
+
+It is relatively simple to add your own metric functions. Take on this function as an example.
+
+```
+#
+# BEGIN filesystem usage
+function metrics_filesystem {
+    buffer=$(df -PT $filesystem_targets 2>/dev/null | grep -v '^Filesystem' | tr -s '\t' ' ')
+    
+    # Filesystem 1024-blocks Used Available Capacity Mounted on
+    # /dev/mapper/cl-home 99533328 37320564 62212764 38% /
+    buildMetric "filesystem_total_kbytes" "gauge" "From df"
+    buildMetric "filesystem_used_kbytes" "gauge" "From df"
+    buildMetric "filesystem_avail_kbytes" "gauge" "From df"
+    buildMetric "filesystem_capacity_percent" "gauge" "From df"
+
+    while read -r device fstype total used avail percent target; do 
+        labels="{mountpoint=\"$target\",source=\"$device\",fstype=\"$fstype\"}"
+        addMetricContent "filesystem_total_kbytes" "$labels $total"
+        addMetricContent "filesystem_used_kbytes" "$labels $used"
+        addMetricContent "filesystem_avail_kbytes" "$labels $avail"
+        noPercentSign=$(echo "$percent" | sed 's,%,,g')
+        addMetricContent "filesystem_capacity_percent" "$labels $noPercentSign"
+    done <<< "$buffer"
+
+    buildOutput
+}
+# END filesystem usage
+```
+
+The function **buildMetric** basically adds a metric to the collection, in this case the metric name is uptime_seconds_total, the type is "counter" and the help text is "System uptime".
+
+The **addMetricContent** function is used to add the actual metric value and labels. Unfortunately there is no built-in handling for labels.
+
+**buildOutput** is used to "convert" the metric arrays to Prometheus compatible output and is placed at the very end.
+
+The function name name must be preceded by metrics_, ie. metrics_myfunction for it to be utilized. Once you have your function add it to the array at line 22:
+
+`declare -a exporters=( myfunction ... )`
+
+Note in the above array we are not using the "metrics_" prefix.
