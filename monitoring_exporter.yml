@@ -9,13 +9,13 @@
       state: directory
 
   - apt:
-      pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
+      pkg: [ "xinetd", "bc", "sysstat", "net-tools", "conntrack" ]
       state: present
     when:
     - "ansible_distribution == 'Ubuntu' or ansible_distribution == 'Debian'"
     
   - yum:
-      pkg: [ "xinetd", "bc", "sysstat", "net-tools" ]
+      pkg: [ "xinetd", "bc", "sysstat", "net-tools", "conntrack-tools" ]
       state: present
     when:
     - "ansible_distribution == 'CentOS' or ansible_distribution == 'CloudLinux'"

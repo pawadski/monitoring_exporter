@@ -19,7 +19,9 @@ workers=2
 #        kernel - kernel version (as label)
 #      slabinfo - /proc/slabinfo # disabled by default
 #       file_nr - /proc/sys/fs/file-nr, file descriptor information
-declare -a exporters=(loadavg stat iostat filesystem memory netdev netstat uptime kernel file_nr)
+#     conntrack - information from the conntrack utility
+# declare -a exporters=(loadavg stat iostat filesystem memory netdev netstat uptime kernel file_nr conntrack)
+declare -a exporters=(loadavg conntrack)
 # used to determine if netstat module should only report total amount of connections
 # useful for servers like openvz hypervisors or generally busy servers, enabled by default
 netstat_totalonly=1
@@ -29,6 +31,8 @@ slab_nonzeroonly=1
 # defines an alternative path df should monitor
 # ie. df / /mnt/otherfs, empty by default
 filesystem_targets=""
+# whether to ignore CPUs with IDs > number of processors in conntrack
+conntrack_ignore_fake_cpuid=1
 # defines the exporter name, prepended to every metric name
 exporterName="monitoring"
 # define path to interpreter, in case it's different than stock
@@ -395,6 +399,58 @@ function metrics_netdev {
             done
         done 
     done < <(echo "$buffer" | grep ':')    
+
+    buildOutput
+}
+#
+
+#
+# BEGIN extract data from the conntrack utility
+function metrics_conntrack {
+    # # conntrack -S conntrack
+    # cpu=0           found=136 invalid=7864574 ignore=1238 insert=0 insert_failed=0 drop=0 early_drop=5904 error=193727 search_restart=12759417
+    # cpu=1           found=131 invalid=1455753 ignore=468 insert=0 insert_failed=0 drop=0 early_drop=81 error=3 search_restart=5313345
+    # cpu=2           found=128 invalid=1462495 ignore=552 insert=0 insert_failed=0 drop=0 early_drop=30 error=0 search_restart=5338620
+    # # conntrack -S expect
+    # cpu=0           expect_new=0 expect_create=0 expect_delete=0
+    # cpu=1           expect_new=0 expect_create=0 expect_delete=0
+    # cpu=2           expect_new=0 expect_create=0 expect_delete=0
+
+    metrics_done=0
+    if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
+        processors=$(($(nproc)-1))
+    fi 
+
+    buildMetric "conntrack_counter" "gauge" "From conntrack -C"
+
+    for table in conntrack expect; do 
+        buildMetric "conntrack_counter" "gauge" "From conntrack -C"
+        addMetricContent "conntrack_counter" "{table=\"$table\"}" "$(conntrack -C $table)"
+        while read line; do 
+            read -r cpu_label counters <<< "$line"
+            IFS="=" read -r cpu_label cpu_value <<< "$cpu_label"
+
+            if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
+                if [ "$cpu_value" -gt "$processors" ]; then 
+                    continue 
+                fi 
+            fi 
+
+            if [ "$metrics_done" = "0" ]; then 
+                for counter in $counters; do 
+                    IFS="=" read -r metric value <<< "$counter"
+                    buildMetric "conntrack_${metric}_total" "counter" "From conntrack -S"
+                done 
+                metrics_done=1
+            fi 
+
+            for counter in $counters; do 
+                IFS="=" read -r metric value <<< "$counter"
+                echo "$metric" "$value"
+                addMetricContent "conntrack_${metric}_total" "{cpu=\"$cpu_value\"} $value"
+            done 
+        done < <(conntrack -S $table)
+    done 
 
     buildOutput
 }
