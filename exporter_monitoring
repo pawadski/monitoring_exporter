@@ -416,16 +416,16 @@ function metrics_conntrack {
     # cpu=1           expect_new=0 expect_create=0 expect_delete=0
     # cpu=2           expect_new=0 expect_create=0 expect_delete=0
 
-    metrics_done=0
     if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
         processors=$(($(nproc)-1))
     fi 
 
     buildMetric "conntrack_counter" "gauge" "From conntrack -C"
+    buildMetric "conntrack_statistics" "gauge" "From conntrack -S"
 
     for table in conntrack expect; do 
-        buildMetric "conntrack_counter" "gauge" "From conntrack -C"
-        addMetricContent "conntrack_counter" "{table=\"$table\"}" "$(conntrack -C $table)"
+        addMetricContent "conntrack_counter" "{table=\"$table\"} $(conntrack -C $table)"
+         
         while read line; do 
             read -r cpu_label counters <<< "$line"
             IFS="=" read -r cpu_label cpu_value <<< "$cpu_label"
@@ -436,18 +436,9 @@ function metrics_conntrack {
                 fi 
             fi 
 
-            if [ "$metrics_done" = "0" ]; then 
-                for counter in $counters; do 
-                    IFS="=" read -r metric value <<< "$counter"
-                    buildMetric "conntrack_${metric}_total" "counter" "From conntrack -S"
-                done 
-                metrics_done=1
-            fi 
-
             for counter in $counters; do 
                 IFS="=" read -r metric value <<< "$counter"
-                echo "$metric" "$value"
-                addMetricContent "conntrack_${metric}_total" "{cpu=\"$cpu_value\"} $value"
+                addMetricContent "conntrack_statistics" "{cpu=\"$cpu_value\",counter=\"$metric\",table=\"$table\"} $value"
             done 
         done < <(conntrack -S $table)
     done 
