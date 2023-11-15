@@ -123,6 +123,8 @@ Exports data from `iostat -xm`
 
 * device: the block device
 
+Configuration variable `iostat_targets` can be used to specify a list of block devices to pull metrics for, space-separated.
+
 #### meminfo (default: enabled)
 
 Exports data from `/proc/meminfo`
@@ -170,6 +172,8 @@ Exports data from `/proc/net/dev`
 
 `1` network device
 
+Configuration variable `netdev_targets` can be used to specify a list of interfaces to pull metrics for, space-separated.
+
 #### netstat (default: enabled)
 
 | name                                  | description                                                       | additional labels | units |
@@ -206,6 +210,19 @@ By default, `slab_nonzeroonly` is set to `1` so that this function reports only 
 | monitoring_slabinfo_pagesperslab  | Number of pages allocated for each slab                                               | slab`1`           | N     |
 
 `1` slab identifier
+
+#### conntrack (default: disabled)
+
+| name                              | description                | additional labels    | units |
+|-----------------------------------|----------------------------|----------------------|-------|
+| monitoring_conntrack_counter      | Output from `conntrack -C` | table`1`             | N     |
+| monitoring_conntrack_statistics   | Output from `conntrack -S` | table`1`, counter`2`, cpu`3` | N     |
+
+`1` conntrack table name   
+`2` conntrack counter name   
+`3` this label represents the CPU ID if `conntrack_sum_all_cpu` is set to `0`, otherwise the label is not present   
+
+Configuration variable `conntrack_ignore_fake_cpuid` controls whether "fake cpuids" are reported. Default `1`.
 
 ## Extending
 
