@@ -19,6 +19,7 @@ workers=2
 #        kernel - kernel version (as label)
 #      slabinfo - /proc/slabinfo # disabled by default
 #       file_nr - /proc/sys/fs/file-nr, file descriptor information
+#     conntrack - information from the conntrack utility
 declare -a exporters=(loadavg stat iostat filesystem memory netdev netstat uptime kernel file_nr)
 # used to determine if netstat module should only report total amount of connections
 # useful for servers like openvz hypervisors or generally busy servers, enabled by default
@@ -26,9 +27,21 @@ netstat_totalonly=1
 # useful for limiting the amount of metrics - enable to report only
 # slabs that are of non-zero size
 slab_nonzeroonly=1
-# defines an alternative path df should monitor
-# ie. df / /mnt/otherfs, empty by default
+# optionally specify interfaces you'd like to pull netdev metrics for
+# ie. eth0 eth1, empty by default
+netdev_targets=""
+# optionally specify filesystem mount points for df
+# ie. / /mnt/otherfs, empty by default
 filesystem_targets=""
+# optionally specify block devices you'd like to pull iostat metrics for
+# ie. sda sdb, empty by default
+iostat_targets=""
+# whether to ignore CPUs with IDs > number of processors in conntrack
+conntrack_ignore_fake_cpuid=1
+# high cardinality metric!
+# when 0, will report conntrack stats for each cpu
+# when 1, will report a sum of conntrack stats for all cpus
+conntrack_sum_all_cpu=1
 # defines the exporter name, prepended to every metric name
 exporterName="monitoring"
 # define path to interpreter, in case it's different than stock
@@ -298,14 +311,19 @@ function metrics_stat {
 
     # iterate & compare /proc/stat output arrays
     index=0
+    delta_total=0
     for item in "${cpudata1[@]}"; do
-        difference[$index]=$(( ${cpudata2[$index]} - ${cpudata1[$index]} ))
+        delta=$(( ${cpudata2[$index]} - ${cpudata1[$index]} ))
+
+        difference[$index]=$delta
+        delta_total=$(( $delta_total + $delta ))
+
         index=$(( $index + 1 ))
     done 
 
-    total=$(( ${difference[0]} + ${difference[1]} + ${difference[2]} + ${difference[3]} + ${difference[4]} ))
-    idlePercentage="(( ${difference[3]} + ${difference[4]} ) / $total) * 100.0"
-    iowaitPercentage="(( ${difference[4]} ) / $total) * 100.0"
+    # total=$(( ${difference[0]} + ${difference[1]} + ${difference[2]} + ${difference[3]} + ${difference[4]} ))
+    idlePercentage="(( ${difference[3]} + ${difference[4]} ) / $delta_total) * 100.0"
+    iowaitPercentage="(( ${difference[4]} ) / $delta_total) * 100.0"
     cpuutil=$(awk "BEGIN { printf \"%i\", 100.0 - $idlePercentage }" )
     iowait=$(awk "BEGIN { printf \"%i\", $iowaitPercentage }")
 
@@ -351,11 +369,21 @@ function metrics_iostat {
         buildMetric "iostat_$column" "gauge" "From iostat"
     done
 
+    # device targets
+    declare -a only_devices=($iostat_targets)
+
     # finally add our metric contents
     index=0
     while read line; do 
         while read -r device data; do
             device="${device/\//_}" # replace / in device names with _
+
+            if [ ! -z "$iostat_targets" ]; then
+                if [[ ! "${only_devices[@]}" =~ "$device" ]]; then
+                    continue # not in list of targets
+                fi
+            fi
+
             for item in $data; do 
                 addMetricContent "iostat_${cols[$index]}" "{device=\"$device\"} $item"
                 index=$(( index + 1 ))
@@ -382,10 +410,19 @@ function metrics_netdev {
         done 
     done 
 
+    # device target selection
+    declare -a only_interfaces=($netdev_targets)
+
     # dev rxbytes rxpkts rxerrs rxdrop rxfifo rxframe rxcomp rxmulticast txbytes txpkts txerrs txdrop txfifo txframe txcomp txmulticast
     while read line; do 
         newline=$(echo "$line" | sed 's,:, ,g' | tr -s '\t' ' ')
         array=($newline)
+
+        if [ ! -z "$netdev_targets" ]; then
+            if [[ ! "${only_interfaces[@]}" =~ "${array[0]}" ]]; then
+                continue # not in list of targets
+            fi
+        fi
         
         index=1
         for type in rx tx; do 
@@ -395,6 +432,74 @@ function metrics_netdev {
             done
         done 
     done < <(echo "$buffer" | grep ':')    
+
+    buildOutput
+}
+#
+
+#
+# BEGIN extract data from the conntrack utility
+function metrics_conntrack {
+    # # conntrack -S conntrack
+    # cpu=0           found=136 invalid=7864574 ignore=1238 insert=0 insert_failed=0 drop=0 early_drop=5904 error=193727 search_restart=12759417
+    # cpu=1           found=131 invalid=1455753 ignore=468 insert=0 insert_failed=0 drop=0 early_drop=81 error=3 search_restart=5313345
+    # cpu=2           found=128 invalid=1462495 ignore=552 insert=0 insert_failed=0 drop=0 early_drop=30 error=0 search_restart=5338620
+    # # conntrack -S expect
+    # cpu=0           expect_new=0 expect_create=0 expect_delete=0
+    # cpu=1           expect_new=0 expect_create=0 expect_delete=0
+    # cpu=2           expect_new=0 expect_create=0 expect_delete=0
+
+    if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
+        processors=$(($(nproc)-1))
+    fi 
+
+    buildMetric "conntrack_counter" "gauge" "From conntrack -C"
+    buildMetric "conntrack_statistics" "gauge" "From conntrack -S"
+
+    for table in conntrack expect; do 
+        addMetricContent "conntrack_counter" "{table=\"$table\"} $(conntrack -C $table)"
+
+        # sum of all CPUs is way less cardinality
+        if [ "$conntrack_sum_all_cpu" = "1" ]; then
+            declare -A cols=()
+
+            while read line; do
+                read -r cpu_label counters <<< "$line"
+                IFS="=" read -r cpu_label cpu_value <<< "$cpu_label"
+
+                if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
+                    if [ "$cpu_value" -gt "$processors" ]; then 
+                        continue 
+                    fi 
+                fi 
+
+                for counter in $counters; do 
+                    IFS="=" read -r metric value <<< "$counter"
+                    cols[$metric]=$(( ${cols[$metric]} + $value ))
+                done 
+            done < <(conntrack -S $table)
+
+            for counter in "${!cols[@]}"; do
+                addMetricContent "conntrack_statistics" "{counter=\"$counter\",table=\"$table\"} ${cols[$counter]}"
+            done
+        else
+            while read line; do 
+                read -r cpu_label counters <<< "$line"
+                IFS="=" read -r cpu_label cpu_value <<< "$cpu_label"
+
+                if [ "$conntrack_ignore_fake_cpuid" = "1" ]; then 
+                    if [ "$cpu_value" -gt "$processors" ]; then 
+                        continue 
+                    fi 
+                fi 
+
+                for counter in $counters; do 
+                    IFS="=" read -r metric value <<< "$counter"
+                    addMetricContent "conntrack_statistics" "{cpu=\"$cpu_value\",counter=\"$metric\",table=\"$table\"} $value"
+                done 
+            done < <(conntrack -S $table)
+        fi
+    done 
 
     buildOutput
 }
